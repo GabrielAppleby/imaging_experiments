@@ -7,8 +7,8 @@ from PIL import Image
 
 RANDOM_SEED: int = 42
 DATA_DIR: Path = Path(Path(Path(__file__).parent.absolute()), 'storage')
-RAW_DATA_DIR: Path = Path(DATA_DIR, 'raw')
-PNG_DATA_DIR: Path = Path(DATA_DIR, 'png')
+RAW_DATA_DIR: Path = Path(DATA_DIR, 'storage/raw')
+PNG_DATA_DIR: Path = Path(DATA_DIR, 'storage/png')
 DUKE_RAW_DIR: Path = Path(RAW_DATA_DIR, 'duke')
 DUKE_RAW_NORMAL_DIR: Path = Path(DUKE_RAW_DIR, 'normal')
 DUKE_RAW_AMD_DIR: Path = Path(DUKE_RAW_DIR, 'amd')
