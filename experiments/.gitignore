@@ -2,9 +2,12 @@
 # Created by https://www.toptal.com/developers/gitignore/api/python,pycharm+all,pycharm+iml,pycharm
 # Edit at https://www.toptal.com/developers/gitignore?templates=python,pycharm+all,pycharm+iml,pycharm
 *.npz
+*.pt
 *.cif
 *.pkl
 **/records/*
+data/storage/
+lightning_logs/
 **/raw/*
 
 ### PyCharm ###
