@@ -8,7 +8,7 @@ from torchvision.datasets import ImageFolder
 from torchvision.transforms import Compose, Resize, ToTensor, Grayscale
 
 DATA_DIR: Path = Path(Path(Path(__file__).parent.absolute()), 'storage')
-PNG_DATA_DIR: Path = Path(DATA_DIR, 'storage/png')
+PNG_DATA_DIR: Path = Path(DATA_DIR, 'png')
 DUKE_PNG_DIR: Path = Path(PNG_DATA_DIR, 'duke')
 
 
@@ -20,6 +20,7 @@ class DukeDataModule(pl.LightningDataModule):
                  data_dir: str = DUKE_PNG_DIR):
         super().__init__()
         self.batch_size = batch_size
+        # Histogram normalization,
         self.transform = Compose([Grayscale(), Resize(resized_shape), ToTensor()])
         self.dims = resized_shape
         self.data_dir = data_dir

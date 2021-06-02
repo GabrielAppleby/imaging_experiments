@@ -72,8 +72,7 @@ class WGANGP(LightningModule):
         self.b2 = b2
         self.batch_size = batch_size
 
-        mnist_shape = (1, 32, 32)
-        self.generator = Generator(latent_dim=self.latent_dim, img_shape=mnist_shape)
+        self.generator = Generator(latent_dim=self.latent_dim, img_shape=self.img_dim)
         self.discriminator = Discriminator(img_shape=self.img_dim)
 
         self.validation_z = torch.randn(8, self.latent_dim)
