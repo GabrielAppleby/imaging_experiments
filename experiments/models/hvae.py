@@ -6,7 +6,7 @@ import torch.nn.functional as F
 import pytorch_lightning as pl
 from torch import nn as nn
 from torch.nn import Identity
-from torchinfo import summary
+#from torchinfo import summary
 
 
 class BatchNormSwish(nn.Module):
@@ -647,7 +647,7 @@ class VAE(pl.LightningModule):
         all_kls = torch.stack(all_kls, dim=1)
         kl = torch.sum(all_kls, dim=1).mean()
         recon_loss = F.mse_loss(logits, x)
-        loss = kl + recon_loss
+        loss = recon_loss + kl
 
         logs = {
             "recon_loss": recon_loss,
@@ -671,6 +671,7 @@ class VAE(pl.LightningModule):
 
 
 if __name__ == '__main__':
+    pass
     # input_channels = 3
     # num_scales = 5
     # max_groups_per_scale = 16
@@ -679,7 +680,7 @@ if __name__ == '__main__':
     # num_hidden_channels = 30
     # hidden_channel_mult = 2
 
-    summary(VAE(input_shape=(3, 32, 32), num_scales=5, max_groups_per_scale=16, min_groups_per_scale=4,
-                    num_latent_per_group=20, num_hidden_channels=30),
-            input_size=(1, 3, 32, 32), depth=99)
+    #summary(VAE(input_shape=(3, 32, 32), num_scales=5, max_groups_per_scale=16, min_groups_per_scale=4,
+    #                num_latent_per_group=20, num_hidden_channels=30),
+    #        input_size=(1, 3, 32, 32), depth=99)
     # summary(DecoderConvSEBlock(in_channels=960, out_channels=960, stride=1), input_size=(1, 960, 8, 8), depth=99)

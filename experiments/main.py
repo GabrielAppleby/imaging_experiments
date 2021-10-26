@@ -5,7 +5,7 @@ from typing import Tuple
 
 import torchvision
 from pytorch_lightning import Trainer, LightningDataModule
-from pytorch_lightning.callbacks import EarlyStopping
+from pytorch_lightning.callbacks import EarlyStopping, GPUStatsMonitor
 
 from data.duke_data_module import DukeDataModule
 from pl_bolts.datamodules import FashionMNISTDataModule
@@ -15,12 +15,16 @@ from models.hvae import VAE
 RESULTS_DIR: Path = Path(Path(Path(__file__).parent.absolute()), 'results')
 
 
+def transform():
+    return torchvision.transforms.Compose([torchvision.transforms.Pad(2), torchvision.transforms.ToTensor()])
+
+
 def main():
     image_shape = (1, 32, 32)
 
     # dm = DukeDataModule(resized_shape=(256, 256), batch_size=1)
-    dm = FashionMNISTDataModule()
-    dm.default_transforms = lambda: torchvision.transforms.Compose([torchvision.transforms.Pad(2), torchvision.transforms.ToTensor()])
+    dm = FashionMNISTDataModule(num_workers=4)
+    dm.default_transforms = transform
     dm.prepare_data()
     dm.setup()
 
@@ -28,13 +32,13 @@ def main():
 
 
 def train(image_shape: Tuple[int, int, int], dm: LightningDataModule):
-    callbacks = [EarlyStopping(monitor='val_loss', patience=10), TrainImageReconstructionLogger()]
+    callbacks = [EarlyStopping(monitor='val_loss', patience=10), TrainImageReconstructionLogger(), GPUStatsMonitor()]
 
     model = VAE(input_shape=image_shape)
-    trainer = Trainer(gpus=0,
-                      max_epochs=500,
-                      callbacks=callbacks,
-                      terminate_on_nan=True)
+    trainer = Trainer(gpus=1,
+                      max_time="00:23:50:00",
+                      max_epochs=50,
+                      callbacks=callbacks)
     trainer.fit(model, datamodule=dm)
     torch.save(model, 'vae.pt')
 
