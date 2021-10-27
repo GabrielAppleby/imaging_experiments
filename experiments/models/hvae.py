@@ -6,7 +6,7 @@ import torch.nn.functional as F
 import pytorch_lightning as pl
 from torch import nn as nn
 from torch.nn import Identity
-#from torchinfo import summary
+# from torchinfo import summary
 
 
 class BatchNormSwish(nn.Module):
@@ -442,9 +442,9 @@ class Decoder(nn.Module):
                 self._upsamplers.append(DecoderUpsample(scale_channels, scale_channels // 2, 1, ex=6))
 
         self._prior = nn.Parameter(torch.rand(size=spatial_scaling, requires_grad=True))
-        self._post_process = Postprocess(in_channels=2 * output_size, out_channels=(2 * output_size) // 2)
+        self._post_process = Postprocess(in_channels=2 * num_hidden_channels, out_channels=num_hidden_channels)
         self._image_conditional = nn.Sequential(nn.ELU(),
-                                    WeightNormedConv2d((2 * output_size) // 2, output_channels, 3, padding=1, bias=True))
+                                    WeightNormedConv2d(num_hidden_channels, output_channels, 3, padding=1, bias=True))
 
     def forward(self, z, results):
         s = self._prior.unsqueeze(0)
@@ -516,7 +516,6 @@ class Decoder(nn.Module):
             if not scale_idx == self._num_scales - 1:
                 s = self._upsamplers[scale_idx](s)
                 # print("s after upsampler: {}".format(torch.isnan(s).any()))
-
         s = self._post_process(s)
 
         logits = self._image_conditional(s)
@@ -581,13 +580,13 @@ class VAE(pl.LightningModule):
         super(VAE, self).__init__()
 
         self.save_hyperparameters()
-        c_scaling = 2 ** (1 + 2 - 1)
-        spatial_scaling = 2 ** (1 + 2 - 1)
-        num_scales = 2
-        max_groups_per_scale = 10
+        num_scales = 5
+        max_groups_per_scale = 16
         min_groups_per_scale = 4
         num_latent_per_group = 20
-        num_hidden_channels = 32
+        num_hidden_channels = 24
+        c_scaling = 2 ** (1 + num_scales - 1)
+        spatial_scaling = 2 ** (1 + num_scales - 1)
         prior_ftr0_size = (
             int(c_scaling * num_hidden_channels), input_shape[1] // spatial_scaling,
             input_shape[1] // spatial_scaling)
@@ -647,7 +646,7 @@ class VAE(pl.LightningModule):
         all_kls = torch.stack(all_kls, dim=1)
         kl = torch.sum(all_kls, dim=1).mean()
         recon_loss = F.mse_loss(logits, x)
-        loss = recon_loss + kl
+        loss = recon_loss
 
         logs = {
             "recon_loss": recon_loss,
@@ -679,8 +678,7 @@ if __name__ == '__main__':
     # num_latent_per_group = 20
     # num_hidden_channels = 30
     # hidden_channel_mult = 2
-
-    #summary(VAE(input_shape=(3, 32, 32), num_scales=5, max_groups_per_scale=16, min_groups_per_scale=4,
+    #
+    # summary(VAE(input_shape=(3, 256, 256), num_scales=5, max_groups_per_scale=16, min_groups_per_scale=4,
     #                num_latent_per_group=20, num_hidden_channels=30),
-    #        input_size=(1, 3, 32, 32), depth=99)
-    # summary(DecoderConvSEBlock(in_channels=960, out_channels=960, stride=1), input_size=(1, 960, 8, 8), depth=99)
+    #        input_size=(1, 3, 256, 256), depth=99)

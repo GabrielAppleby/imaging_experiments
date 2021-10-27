@@ -7,6 +7,7 @@ import torchvision
 from pytorch_lightning import Trainer, LightningDataModule
 from pytorch_lightning.callbacks import EarlyStopping, GPUStatsMonitor
 
+from data.celeb_data_module import CelebDataModule
 from data.duke_data_module import DukeDataModule
 from pl_bolts.datamodules import FashionMNISTDataModule
 from models.callbacks import TrainImageReconstructionLogger
@@ -20,11 +21,12 @@ def transform():
 
 
 def main():
-    image_shape = (1, 32, 32)
+    image_shape = (3, 256, 256)
 
     # dm = DukeDataModule(resized_shape=(256, 256), batch_size=1)
-    dm = FashionMNISTDataModule(num_workers=4)
-    dm.default_transforms = transform
+    # dm = FashionMNISTDataModule(num_workers=4)
+    dm = CelebDataModule()
+    # dm.default_transforms = transform
     dm.prepare_data()
     dm.setup()
 

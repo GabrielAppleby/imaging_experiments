@@ -2,13 +2,13 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 import pytorch_lightning as pl
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, random_split
 
-from torchvision.datasets import CelebA
+from torchvision.datasets import ImageFolder
 from torchvision.transforms import Compose, Resize, ToTensor
 
-DATA_DIR: Path = Path(Path(Path(__file__).parent.absolute()), 'storage')
-PNG_DATA_DIR: Path = Path(DATA_DIR, 'torch')
+DATA_DIR: Path = Path('/cluster/tufts/valt/gapple01/imaging/', 'storage')
+PNG_DATA_DIR: Path = Path(DATA_DIR, 'png')
 CELEBA_PNG_DIR: Path = Path(PNG_DATA_DIR, 'celeba')
 
 
@@ -16,7 +16,7 @@ class CelebDataModule(pl.LightningDataModule):
 
     def __init__(self,
                  batch_size: int = 4,
-                 resized_shape: Tuple[int, int] = (224, 224),
+                 resized_shape: Tuple[int, int] = (256, 256),
                  data_dir: str = CELEBA_PNG_DIR):
         super().__init__()
         self.batch_size = batch_size
@@ -28,13 +28,12 @@ class CelebDataModule(pl.LightningDataModule):
         self.val = None
         self.test = None
 
-    def prepare_data(self):
-        CelebA(root=str(CELEBA_PNG_DIR), split='all', transform=self.transform, download=True)
-
     def setup(self, stage: Optional[str] = None):
-        self.train = CelebA(root=str(CELEBA_PNG_DIR), split='train', transform=self.transform)
-        self.val = CelebA(root=str(CELEBA_PNG_DIR), split='val', transform=self.transform)
-        self.test = CelebA(root=str(CELEBA_PNG_DIR), split='test', transform=self.transform)
+        dataset = ImageFolder(root=str(CELEBA_PNG_DIR), transform=self.transform)
+        num_instances = len(dataset)
+        self.train, self.val = random_split(dataset,
+                                            [int(num_instances * .9), int(num_instances * .1)])
+        self.test = self.val
 
     def train_dataloader(self):
         return DataLoader(self.train,
