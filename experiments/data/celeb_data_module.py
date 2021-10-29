@@ -17,13 +17,14 @@ class CelebDataModule(pl.LightningDataModule):
     def __init__(self,
                  batch_size: int = 4,
                  resized_shape: Tuple[int, int] = (256, 256),
-                 data_dir: str = CELEBA_PNG_DIR):
+                 data_dir: str = CELEBA_PNG_DIR,
+                 num_workers: int = 4):
         super().__init__()
         self.batch_size = batch_size
         self.transform = Compose([Resize(resized_shape), ToTensor()])
         self.dims = resized_shape
         self.data_dir = data_dir
-        self.num_workers = 4
+        self.num_workers = num_workers
         self.train = None
         self.val = None
         self.test = None

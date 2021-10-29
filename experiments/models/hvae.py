@@ -7,6 +7,7 @@ import pytorch_lightning as pl
 from torch import nn as nn
 from torch.nn import Identity
 # from torchinfo import summary
+from models.utils import calc_kl_and_z, kl_coefficients
 
 
 class BatchNormSwish(nn.Module):
@@ -282,6 +283,7 @@ class Postprocess(nn.Module):
     def forward(self, x):
         return self._seq(x)
 
+
 class EncoderGroup(nn.Module):
     def __init__(self, channels):
         super(EncoderGroup, self).__init__()
@@ -323,6 +325,27 @@ class EncoderScale(nn.Module):
         return x, results
 
 
+class SCombiner(nn.Module):
+
+    def __init__(self, in_channels, out_channels):
+        super(SCombiner, self).__init__()
+        self.conv = WeightNormedConv2d(in_channels, out_channels, kernel_size=1, stride=1, padding=0, bias=True)
+
+    def forward(self, s1, s2):
+        s2 = self.conv(s2)
+        return s1 + s2
+
+
+class SZCombiner(nn.Module):
+
+    def __init__(self, in_channels, out_channels):
+        super(SZCombiner, self).__init__()
+        self.conv = WeightNormedConv2d(in_channels, out_channels, kernel_size=1, stride=1, padding=0, bias=True)
+
+    def forward(self, s, z):
+        return self.conv(torch.cat([s, z], dim=1))
+
+
 class Encoder(nn.Module):
 
     def __init__(self,
@@ -355,7 +378,7 @@ class Encoder(nn.Module):
                              has_fr_res_block=has_fr_res_block,
                              save_last_result=save_last_result))
 
-        final_encoding_channels = 2 ** (num_scales - 1) * 2 * num_hidden_channels
+        final_encoding_channels = 2 ** num_scales * num_hidden_channels
         self._final_encoding = nn.Sequential(
             nn.ELU(),
             WeightNormedConv2d(final_encoding_channels, final_encoding_channels, kernel_size=1,
@@ -377,33 +400,11 @@ class Encoder(nn.Module):
         return mu, log_var, results
 
 
-class SCombiner(nn.Module):
-
-    def __init__(self, in_channels, out_channels):
-        super(SCombiner, self).__init__()
-        self.conv = WeightNormedConv2d(in_channels, out_channels, kernel_size=1, stride=1, padding=0, bias=True)
-
-    def forward(self, s1, s2):
-        s2 = self.conv(s2)
-        return s1 + s2
-
-
-class SZCombiner(nn.Module):
-
-    def __init__(self, in_channels, out_channels):
-        super(SZCombiner, self).__init__()
-        self.conv = WeightNormedConv2d(in_channels, out_channels, kernel_size=1, stride=1, padding=0, bias=True)
-
-    def forward(self, s, z):
-        return self.conv(torch.cat([s, z], dim=1))
-
-
 class Decoder(nn.Module):
 
     def __init__(self,
                  output_channels=3,
-                 output_size=256,
-                 spatial_scaling=32,
+                 final_encoding_size=(96, 8, 8),
                  num_scales=5,
                  max_groups_per_scale=16,
                  min_groups_per_scale=4,
@@ -440,8 +441,7 @@ class Decoder(nn.Module):
                 self._s_z_combiners.append(SZCombiner(scale_channels + num_latent_per_group, scale_channels))
             if not scale_idx == 0:
                 self._upsamplers.append(DecoderUpsample(scale_channels, scale_channels // 2, 1, ex=6))
-
-        self._prior = nn.Parameter(torch.rand(size=spatial_scaling, requires_grad=True))
+        self._prior = nn.Parameter(torch.rand(size=final_encoding_size, requires_grad=True))
         self._post_process = Postprocess(in_channels=2 * num_hidden_channels, out_channels=num_hidden_channels)
         self._image_conditional = nn.Sequential(nn.ELU(),
                                     WeightNormedConv2d(num_hidden_channels, output_channels, 3, padding=1, bias=True))
@@ -481,34 +481,9 @@ class Decoder(nn.Module):
 
                 mu_q, log_sig_q = torch.chunk(param, 2, dim=1)
 
-                mu = mu_p + mu_q
-                mu = mu.div(5.).tanh().mul(5.)
-                # print("mu: {}".format(torch.isnan(mu).any()))
-                mu_p = mu_p.div(5.).tanh().mul(5.)
-                # print("mu_p: {}".format(torch.isnan(mu_p).any()))
-                log_sig = log_sig_p + log_sig_q
-                log_sig = log_sig.div(5.).tanh().mul(5.)
-                sig = torch.exp(log_sig) + 1e-2
-                # print("log_sig: {}".format(torch.isnan(log_sig).any()))
-                log_sig_p = log_sig_p.div(5.).tanh().mul(5.)
-                sig_p = torch.exp(log_sig_p) + 1e-2
-                # print("log_sig_p: {}".format(torch.isnan(log_sig_p).any()))
+                kl_per_var, z = calc_kl_and_z(mu_p + mu_q, log_sig_p + log_sig_q, mu_q, log_sig_q)
+                all_kls.append(kl_per_var)
 
-
-                term1 = (mu - mu_p) / sig_p
-                # print("term1: {}".format(torch.isnan(term1).any()))
-
-                term2 = sig / sig_p
-                # print("term2: {}".format(torch.isnan(term2).any()))
-
-                kl_per_var = 0.5 * (term1 * term1 + term2 * term2) - 0.5 - torch.log(term2)
-                # print("large mult: {}".format(torch.isnan(term1 * term1 + term2 * term2).any()))
-                # print(term2)
-                # print("log: {}".format(torch.isnan(torch.log(term2)).any()))
-                # print("kl_per_var: {}".format(torch.isnan(kl_per_var).any()))
-                all_kls.append(torch.sum(kl_per_var, dim=[1, 2, 3]))
-
-                z = torch.randn_like(mu) * sig + mu
                 # print("z dec: {}".format(torch.isnan(z).any()))
                 s = self._s_z_combiners[full_idx + 1](s, z)
                 # print("s after s_z combiner: {}".format(torch.isnan(s).any()))
@@ -523,92 +498,48 @@ class Decoder(nn.Module):
         return logits, all_kls
 
 
-# class VAE(nn.Module):
-#
-#     def __init__(self,
-#                  input_channels=3,
-#                  num_scales=5,
-#                  max_groups_per_scale=16,
-#                  min_groups_per_scale=4,
-#                  num_latent_per_group=20,
-#                  num_hidden_channels=30):
-#         super(VAE, self).__init__()
-#         self._encoder = Encoder()
-#         self._decoder = Decoder()
-#
-#     def forward(self, x):
-#         mu, log_var, results = self._encoder(x)
-#
-#         z = torch.randn_like(mu) * torch.exp(log_var) + mu
-#         logits, all_kls = self._decoder(z, results)
-#
-#         all_kls = torch.stack(all_kls, dim=1)
-#         kl = torch.sum(all_kls, dim=1)
-#         recon_loss = F.mse_loss(logits, x)
-#         loss = kl + recon_loss
-#
-#         return loss
-
-
 class VAE(pl.LightningModule):
     def __init__(
         self,
         input_shape: Tuple[int, int, int],
-        # enc_type: str = 'resnet18',
-        # first_conv: bool = False,
-        # maxpool1: bool = False,
-        # enc_out_dim: int = 512,
-        # kl_coeff: float = 0.1,
-        # latent_dim: int = 256,
-        lr: float = 1e-4,
+        num_scales: int = 2,
+        max_groups_per_scale: int = 16,
+        min_groups_per_scale: int = 4,
+        num_latent_per_group: int = 20,
+        num_hidden_channels: int = 24,
+        kl_coeff: float = 0.1,
         **kwargs
     ):
-        """
-        Args:
-            input_height: height of the images
-            enc_type: option between resnet18 or resnet50
-            first_conv: use standard kernel_size 7, stride 2 at start or
-                replace it with kernel_size 3, stride 1 conv
-            maxpool1: use standard maxpool to reduce spatial dim of feat by a factor of 2
-            enc_out_dim: set according to the out_channel count of
-                encoder used (512 for resnet18, 2048 for resnet50)
-            kl_coeff: coefficient for kl term of the loss
-            latent_dim: dim of latent space
-            lr: learning rate for Adam
-        """
-
         super(VAE, self).__init__()
+        self._input_shape = input_shape
+        self._num_scales = num_scales
+        self._max_groups_per_scale = max_groups_per_scale
+        self._min_groups_per_scale = min_groups_per_scale
+        self._num_latent_per_group = num_latent_per_group
+        self._num_hidden_channels = num_hidden_channels
+        self._kl_coeff = kl_coeff
 
         self.save_hyperparameters()
-        num_scales = 5
-        max_groups_per_scale = 16
-        min_groups_per_scale = 4
-        num_latent_per_group = 20
-        num_hidden_channels = 24
-        c_scaling = 2 ** (1 + num_scales - 1)
-        spatial_scaling = 2 ** (1 + num_scales - 1)
-        prior_ftr0_size = (
-            int(c_scaling * num_hidden_channels), input_shape[1] // spatial_scaling,
-            input_shape[1] // spatial_scaling)
-        self.lr = lr
-        # self.kl_coeff = kl_coeff
-        # self.enc_out_dim = enc_out_dim
-        # self.latent_dim = latent_dim
-        # self.input_height = input_height
-        self._encoder = Encoder(input_channels=input_shape[0],
-                                num_scales=num_scales,
-                                max_groups_per_scale=max_groups_per_scale,
-                                min_groups_per_scale=min_groups_per_scale,
-                                num_latent_per_group=num_latent_per_group,
-                                num_hidden_channels=num_hidden_channels)
-        self._decoder = Decoder(output_channels=input_shape[0],
-                                output_size=input_shape[1],
-                                spatial_scaling=prior_ftr0_size,
-                                num_scales=num_scales,
-                                max_groups_per_scale=max_groups_per_scale,
-                                min_groups_per_scale=min_groups_per_scale,
-                                num_latent_per_group=num_latent_per_group,
-                                num_hidden_channels=num_hidden_channels)
+        final_scale = 2 ** self._num_scales
+        final_encoding_size = (final_scale * self._num_hidden_channels,
+                               self._input_shape[1] // final_scale,
+                               self._input_shape[1] // final_scale)
+        self._encoder = Encoder(input_channels=self._input_shape[0],
+                                num_scales=self._num_scales,
+                                max_groups_per_scale=self._max_groups_per_scale,
+                                min_groups_per_scale=self._min_groups_per_scale,
+                                num_latent_per_group=self._num_latent_per_group,
+                                num_hidden_channels=self._num_hidden_channels)
+        self._decoder = Decoder(output_channels=self._input_shape[0],
+                                final_encoding_size=final_encoding_size,
+                                num_scales=self._num_scales,
+                                max_groups_per_scale=self._max_groups_per_scale,
+                                min_groups_per_scale=self._min_groups_per_scale,
+                                num_latent_per_group=self._num_latent_per_group,
+                                num_hidden_channels=self._num_hidden_channels)
+        self._kl_coeffs = kl_coefficients(self._num_scales,
+                                          self._max_groups_per_scale,
+                                          self._min_groups_per_scale)
 
     def forward(self, x):
         mu, log_var, results = self._encoder(x)
@@ -617,25 +548,17 @@ class VAE(pl.LightningModule):
         return logits
 
     def _run_step(self, x):
-        mu_q, log_var_q, results = self._encoder(x)
-
-        mu_q = mu_q.div(5.).tanh().mul(5.)
-        log_var_q = log_var_q.div(5.).tanh().mul(5.)
-        sig = torch.exp(log_var_q) + 1e-2
-
-        z = torch.randn_like(mu_q) * sig + mu_q
+        mu_q, log_sig_q, results = self._encoder(x)
 
         # print("mu: {}".format(torch.isnan(mu).any()))
         # print("log_var: {}".format(torch.isnan(log_var).any()))
         # Need to also calculate first kl here
-        mu_p = torch.zeros_like(z)
-        sig_p = torch.ones_like(z)
-        term1 = (mu_q - mu_p) / sig_p
-        term2 = sig / sig_p
-        kl_per_var = 0.5 * (term1 * term1 + term2 * term2) - 0.5 - torch.log(term2)
+        mu_p = torch.zeros_like(mu_q)
+        log_sig_p = torch.zeros_like(mu_q)
+        kl_per_var, z = calc_kl_and_z(mu_p, log_sig_p, mu_q, log_sig_q)
         # print("z: {}".format(torch.isnan(z).any()))
         logits, all_kls = self._decoder(z, results)
-        all_kls.insert(0, torch.sum(kl_per_var, dim=[1, 2, 3]))
+        all_kls.insert(0, kl_per_var)
         # print("logits: {}".format(torch.isnan(logits).any()))
         return logits, all_kls
 
@@ -644,9 +567,19 @@ class VAE(pl.LightningModule):
         logits, all_kls = self._run_step(x)
 
         all_kls = torch.stack(all_kls, dim=1)
-        kl = torch.sum(all_kls, dim=1).mean()
-        recon_loss = F.mse_loss(logits, x)
-        loss = recon_loss
+        kl_coeff_i = torch.abs(all_kls)
+        kl_coeff_i = torch.mean(kl_coeff_i, dim=0, keepdim=True) + 0.01
+
+        total_kl = torch.sum(kl_coeff_i)
+
+        kl_coeff_i = kl_coeff_i / self._kl_coeffs * total_kl
+        kl_coeff_i = kl_coeff_i / torch.mean(kl_coeff_i, dim=1, keepdim=True)
+        kl = torch.sum(all_kls * kl_coeff_i, dim=1) * self._kl_coeff
+
+        recon_loss = F.mse_loss(logits, x, reduction='none')
+        recon_loss = torch.mean(recon_loss, dim=[1, 2, 3])
+
+        loss = torch.mean(recon_loss + kl)
 
         logs = {
             "recon_loss": recon_loss,
@@ -666,7 +599,7 @@ class VAE(pl.LightningModule):
         return loss
 
     def configure_optimizers(self):
-        return torch.optim.Adam(self.parameters(), lr=self.lr)
+        return torch.optim.Adam(self.parameters())
 
 
 if __name__ == '__main__':
