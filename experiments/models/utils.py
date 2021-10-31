@@ -1,15 +1,15 @@
 import torch
 
 
-def kl_coefficients(num_scales, max_groups_per_scale, min_groups_per_scale):
+def kl_coefficients(num_scales, max_groups_per_scale, min_groups_per_scale, device):
     coeffs = []
     for i in range(num_scales):
         scale_powers_of_two = 2 ** (num_scales - 1 - i)
         num_groups = int(max(max_groups_per_scale // scale_powers_of_two, min_groups_per_scale))
-        coeffs.append((2 ** i) ** 2 / num_groups * torch.ones(num_groups))
+        coeffs.append((2 ** i) ** 2 / num_groups * torch.ones(num_groups, device=device))
     coeffs = torch.cat(coeffs, dim=0)
     coeffs = coeffs / torch.min(coeffs)
-    return coeffs.unsqueeze(0)
+    return coeffs.unsqueeze(0).cuda()
 
 
 def differentiable_clamp_five(x):

@@ -14,6 +14,8 @@ CELEBA_PNG_DIR: Path = Path(PNG_DATA_DIR, 'celeba')
 
 class CelebDataModule(pl.LightningDataModule):
 
+
+
     def __init__(self,
                  batch_size: int = 4,
                  resized_shape: Tuple[int, int] = (256, 256),
@@ -22,7 +24,7 @@ class CelebDataModule(pl.LightningDataModule):
         super().__init__()
         self.batch_size = batch_size
         self.transform = Compose([Resize(resized_shape), ToTensor()])
-        self.dims = resized_shape
+        self.dims = (3, 256, 256)
         self.data_dir = data_dir
         self.num_workers = num_workers
         self.train = None

@@ -21,8 +21,8 @@ def train(dm: LightningDataModule):
 
     model = VAE(input_shape=dm.dims)
     trainer = Trainer(gpus=1,
-                      max_time="00:23:50:00",
-                      max_epochs=50,
+                      max_time="00:47:50:00",
+                      max_epochs=30,
                       callbacks=callbacks)
     trainer.fit(model, datamodule=dm)
     torch.save(model, 'vae.pt')

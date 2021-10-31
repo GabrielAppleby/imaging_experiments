@@ -354,8 +354,10 @@ class Encoder(nn.Module):
                  max_groups_per_scale=16,
                  min_groups_per_scale=4,
                  num_latent_per_group=20,
-                 num_hidden_channels=30):
+                 num_hidden_channels=30,
+                 device='cuda:0'):
         super(Encoder, self).__init__()
+        self.device = device
         self._seq = nn.Sequential(Stem(input_channels,
                                        num_hidden_channels),
                                   Preprocess(num_hidden_channels,
@@ -409,9 +411,11 @@ class Decoder(nn.Module):
                  max_groups_per_scale=16,
                  min_groups_per_scale=4,
                  num_latent_per_group=20,
-                 num_hidden_channels=30):
+                 num_hidden_channels=30,
+                 device='cuda:0'):
         super(Decoder, self).__init__()
         mult_hidden_channels = num_hidden_channels * 2
+        self.device = device
         self._num_scales = num_scales
         self._max_groups_per_scale = max_groups_per_scale
         self._min_groups_per_scale = min_groups_per_scale
@@ -441,7 +445,7 @@ class Decoder(nn.Module):
                 self._s_z_combiners.append(SZCombiner(scale_channels + num_latent_per_group, scale_channels))
             if not scale_idx == 0:
                 self._upsamplers.append(DecoderUpsample(scale_channels, scale_channels // 2, 1, ex=6))
-        self._prior = nn.Parameter(torch.rand(size=final_encoding_size, requires_grad=True))
+        self._prior = nn.Parameter(torch.rand(size=final_encoding_size, requires_grad=True, device=self.device))
         self._post_process = Postprocess(in_channels=2 * num_hidden_channels, out_channels=num_hidden_channels)
         self._image_conditional = nn.Sequential(nn.ELU(),
                                     WeightNormedConv2d(num_hidden_channels, output_channels, 3, padding=1, bias=True))
@@ -502,7 +506,7 @@ class VAE(pl.LightningModule):
     def __init__(
         self,
         input_shape: Tuple[int, int, int],
-        num_scales: int = 2,
+        num_scales: int = 5,
         max_groups_per_scale: int = 16,
         min_groups_per_scale: int = 4,
         num_latent_per_group: int = 20,
@@ -529,21 +533,24 @@ class VAE(pl.LightningModule):
                                 max_groups_per_scale=self._max_groups_per_scale,
                                 min_groups_per_scale=self._min_groups_per_scale,
                                 num_latent_per_group=self._num_latent_per_group,
-                                num_hidden_channels=self._num_hidden_channels)
+                                num_hidden_channels=self._num_hidden_channels,
+                                device=self.device)
         self._decoder = Decoder(output_channels=self._input_shape[0],
                                 final_encoding_size=final_encoding_size,
                                 num_scales=self._num_scales,
                                 max_groups_per_scale=self._max_groups_per_scale,
                                 min_groups_per_scale=self._min_groups_per_scale,
                                 num_latent_per_group=self._num_latent_per_group,
-                                num_hidden_channels=self._num_hidden_channels)
+                                num_hidden_channels=self._num_hidden_channels,
+                                device=self.device)
         self._kl_coeffs = kl_coefficients(self._num_scales,
                                           self._max_groups_per_scale,
-                                          self._min_groups_per_scale)
+                                          self._min_groups_per_scale,
+                                          device=self.device)
 
     def forward(self, x):
         mu, log_var, results = self._encoder(x)
-        z = torch.randn_like(mu) * torch.exp(log_var) + mu
+        z = torch.randn_like(mu, device=self.device) * torch.exp(log_var) + mu
         logits, _ = self._decoder(z, results)
         return logits
 
@@ -553,8 +560,8 @@ class VAE(pl.LightningModule):
         # print("mu: {}".format(torch.isnan(mu).any()))
         # print("log_var: {}".format(torch.isnan(log_var).any()))
         # Need to also calculate first kl here
-        mu_p = torch.zeros_like(mu_q)
-        log_sig_p = torch.zeros_like(mu_q)
+        mu_p = torch.zeros_like(mu_q, device=self.device)
+        log_sig_p = torch.zeros_like(mu_q, device=self.device)
         kl_per_var, z = calc_kl_and_z(mu_p, log_sig_p, mu_q, log_sig_q)
         # print("z: {}".format(torch.isnan(z).any()))
         logits, all_kls = self._decoder(z, results)
@@ -582,8 +589,8 @@ class VAE(pl.LightningModule):
         loss = torch.mean(recon_loss + kl)
 
         logs = {
-            "recon_loss": recon_loss,
-            "kl": kl,
+            "recon_loss": recon_loss.mean(),
+            "kl": kl.mean(),
             "loss": loss,
         }
         return loss, logs
