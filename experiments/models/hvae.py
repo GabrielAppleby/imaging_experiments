@@ -1,5 +1,5 @@
 import itertools
-from typing import Tuple
+from typing import Tuple, Optional, Callable
 
 import torch
 import torch.nn.functional as F
@@ -7,6 +7,9 @@ import pytorch_lightning as pl
 from torch import nn as nn
 from torch.nn import Identity
 # from torchinfo import summary
+from torch.optim import Optimizer
+
+from models.discretized_logistic_mixture import DiscMixLogistic
 from models.utils import calc_kl_and_z, kl_coefficients
 
 
@@ -448,7 +451,7 @@ class Decoder(nn.Module):
         self._prior = nn.Parameter(torch.rand(size=final_encoding_size, requires_grad=True, device=self.device))
         self._post_process = Postprocess(in_channels=2 * num_hidden_channels, out_channels=num_hidden_channels)
         self._image_conditional = nn.Sequential(nn.ELU(),
-                                    WeightNormedConv2d(num_hidden_channels, output_channels, 3, padding=1, bias=True))
+                                    WeightNormedConv2d(num_hidden_channels, 100, 3, padding=1, bias=True))
 
     def forward(self, z, results):
         s = self._prior.unsqueeze(0)
@@ -511,7 +514,10 @@ class VAE(pl.LightningModule):
         min_groups_per_scale: int = 4,
         num_latent_per_group: int = 20,
         num_hidden_channels: int = 24,
-        kl_coeff: float = 0.1,
+        learning_rate: float = 1e-2,
+        min_kl_coeff: float = 0.0001,
+        anneal_kl_instances: int = 2700000,
+        const_kl_instances: int = 27000,
         **kwargs
     ):
         super(VAE, self).__init__()
@@ -521,7 +527,10 @@ class VAE(pl.LightningModule):
         self._min_groups_per_scale = min_groups_per_scale
         self._num_latent_per_group = num_latent_per_group
         self._num_hidden_channels = num_hidden_channels
-        self._kl_coeff = kl_coeff
+        self._min_kl_coeff = min_kl_coeff
+        self._anneal_kl_instances = anneal_kl_instances
+        self._const_kl_instances = const_kl_instances
+        self.learning_rate = learning_rate
 
         self.save_hyperparameters()
         final_scale = 2 ** self._num_scales
@@ -570,6 +579,8 @@ class VAE(pl.LightningModule):
         return logits, all_kls
 
     def step(self, batch, batch_idx):
+        kl_coeff = max(min(self.global_step * len(batch) - self._const_kl_instances / self._anneal_kl_instances, 1), self._min_kl_coeff)
+
         x, y = batch
         logits, all_kls = self._run_step(x)
 
@@ -581,10 +592,9 @@ class VAE(pl.LightningModule):
 
         kl_coeff_i = kl_coeff_i / self._kl_coeffs * total_kl
         kl_coeff_i = kl_coeff_i / torch.mean(kl_coeff_i, dim=1, keepdim=True)
-        kl = torch.sum(all_kls * kl_coeff_i, dim=1) * self._kl_coeff
+        kl = torch.sum(all_kls * kl_coeff_i, dim=1) * kl_coeff
 
-        recon_loss = F.mse_loss(logits, x, reduction='none')
-        recon_loss = torch.mean(recon_loss, dim=[1, 2, 3])
+        recon_loss = - torch.sum(DiscMixLogistic(logits, self.device).log_prob(x), dim=[1, 2])
 
         loss = torch.mean(recon_loss + kl)
 
@@ -592,6 +602,8 @@ class VAE(pl.LightningModule):
             "recon_loss": recon_loss.mean(),
             "kl": kl.mean(),
             "loss": loss,
+            "kl_coeff": kl_coeff,
+            "lr": self.hparams.learning_rate
         }
         return loss, logs
 
@@ -605,8 +617,31 @@ class VAE(pl.LightningModule):
         self.log_dict({f"val_{k}": v for k, v in logs.items()})
         return loss
 
+    def optimizer_step(
+            self,
+            epoch: int = None,
+            batch_idx: int = None,
+            optimizer: Optimizer = None,
+            optimizer_idx: int = None,
+            optimizer_closure: Optional[Callable] = None,
+            on_tpu: bool = None,
+            using_native_amp: bool = None,
+            using_lbfgs: bool = None,
+    ):
+        # skip the first 500 steps
+        if self.trainer.global_step < 500:
+            lr_scale = min(1.0, float(self.trainer.global_step + 1) / 500.0)
+            for pg in optimizer.param_groups:
+                pg["lr"] = lr_scale * self.hparams.learning_rate
+
+        optimizer.step(closure=optimizer_closure)
+
     def configure_optimizers(self):
-        return torch.optim.Adam(self.parameters())
+        optimizer = torch.optim.Adamax(self.parameters(), 1e-2, weight_decay=3e-4, eps=1e-3)
+
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, 300, eta_min=1e-4)
+
+        return [optimizer], [scheduler]
 
 
 if __name__ == '__main__':

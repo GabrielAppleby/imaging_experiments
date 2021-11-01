@@ -4,6 +4,8 @@ from typing import Optional, Tuple
 import torchvision
 from pytorch_lightning import Callback, Trainer, LightningModule
 
+from models.discretized_logistic_mixture import DiscMixLogistic
+
 
 class TrainImageReconstructionLogger(Callback):
     def __init__(
@@ -30,7 +32,7 @@ class TrainImageReconstructionLogger(Callback):
         # generate images
         with torch.no_grad():
             pl_module.eval()
-            images = pl_module(train_sample.to(pl_module.device))
+            images = DiscMixLogistic(pl_module(train_sample.to(pl_module.device)), pl_module.device).sample()
             pl_module.train()
 
         if len(images.size()) == 2:

@@ -9,7 +9,7 @@ def kl_coefficients(num_scales, max_groups_per_scale, min_groups_per_scale, devi
         coeffs.append((2 ** i) ** 2 / num_groups * torch.ones(num_groups, device=device))
     coeffs = torch.cat(coeffs, dim=0)
     coeffs = coeffs / torch.min(coeffs)
-    return coeffs.unsqueeze(0).cuda()
+    return coeffs.unsqueeze(0).to(device)
 
 
 def differentiable_clamp_five(x):

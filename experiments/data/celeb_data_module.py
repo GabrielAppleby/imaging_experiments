@@ -14,8 +14,6 @@ CELEBA_PNG_DIR: Path = Path(PNG_DATA_DIR, 'celeba')
 
 class CelebDataModule(pl.LightningDataModule):
 
-
-
     def __init__(self,
                  batch_size: int = 4,
                  resized_shape: Tuple[int, int] = (256, 256),
