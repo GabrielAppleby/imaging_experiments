@@ -408,14 +408,14 @@ class Encoder(nn.Module):
 class Decoder(nn.Module):
 
     def __init__(self,
-                 output_channels=3,
+                 output_channels=100,
                  final_encoding_size=(96, 8, 8),
                  num_scales=5,
                  max_groups_per_scale=16,
                  min_groups_per_scale=4,
                  num_latent_per_group=20,
                  num_hidden_channels=30,
-                 device='cuda:0'):
+                 device='none'):
         super(Decoder, self).__init__()
         mult_hidden_channels = num_hidden_channels * 2
         self.device = device
@@ -451,7 +451,7 @@ class Decoder(nn.Module):
         self._prior = nn.Parameter(torch.rand(size=final_encoding_size, requires_grad=True, device=self.device))
         self._post_process = Postprocess(in_channels=2 * num_hidden_channels, out_channels=num_hidden_channels)
         self._image_conditional = nn.Sequential(nn.ELU(),
-                                    WeightNormedConv2d(num_hidden_channels, 100, 3, padding=1, bias=True))
+                                    WeightNormedConv2d(num_hidden_channels, output_channels, 3, padding=1, bias=True))
 
     def forward(self, z, results):
         s = self._prior.unsqueeze(0)
@@ -509,6 +509,7 @@ class VAE(pl.LightningModule):
     def __init__(
         self,
         input_shape: Tuple[int, int, int],
+        output_channels: int = 100,
         num_scales: int = 5,
         max_groups_per_scale: int = 16,
         min_groups_per_scale: int = 4,
@@ -544,7 +545,7 @@ class VAE(pl.LightningModule):
                                 num_latent_per_group=self._num_latent_per_group,
                                 num_hidden_channels=self._num_hidden_channels,
                                 device=self.device)
-        self._decoder = Decoder(output_channels=self._input_shape[0],
+        self._decoder = Decoder(output_channels=output_channels,
                                 final_encoding_size=final_encoding_size,
                                 num_scales=self._num_scales,
                                 max_groups_per_scale=self._max_groups_per_scale,
@@ -579,7 +580,7 @@ class VAE(pl.LightningModule):
         return logits, all_kls
 
     def step(self, batch, batch_idx):
-        kl_coeff = max(min(self.global_step * len(batch) - self._const_kl_instances / self._anneal_kl_instances, 1), self._min_kl_coeff)
+        kl_coeff = max(min((self.global_step * len(batch) - self._const_kl_instances) / self._anneal_kl_instances, 1), self._min_kl_coeff)
 
         x, y = batch
         logits, all_kls = self._run_step(x)
@@ -616,25 +617,6 @@ class VAE(pl.LightningModule):
         loss, logs = self.step(batch, batch_idx)
         self.log_dict({f"val_{k}": v for k, v in logs.items()})
         return loss
-
-    def optimizer_step(
-            self,
-            epoch: int = None,
-            batch_idx: int = None,
-            optimizer: Optimizer = None,
-            optimizer_idx: int = None,
-            optimizer_closure: Optional[Callable] = None,
-            on_tpu: bool = None,
-            using_native_amp: bool = None,
-            using_lbfgs: bool = None,
-    ):
-        # skip the first 500 steps
-        if self.trainer.global_step < 500:
-            lr_scale = min(1.0, float(self.trainer.global_step + 1) / 500.0)
-            for pg in optimizer.param_groups:
-                pg["lr"] = lr_scale * self.hparams.learning_rate
-
-        optimizer.step(closure=optimizer_closure)
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adamax(self.parameters(), 1e-2, weight_decay=3e-4, eps=1e-3)
